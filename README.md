@@ -24,7 +24,8 @@ The SpringIrcBridge application depends on following projects:
 
 Installation
 ------------
-* Copy the dependencies listed above (SimpleLog.pm and SpringLobbyInterface.pm)
+* Copy the dependencies listed above ([SimpleLog.pm](https://raw.github.com/Yaribz/SimpleLog/master/SimpleLog.pm)
+  and [SpringLobbyInterface.pm](https://raw.github.com/Yaribz/SpringLobbyInterface/master/SpringLobbyInterface.pm))
   into same location as SpringIrcBridge files
 * Run "springIrcBridgeServer.pl", it will listen to IRC connections on ports
   6667 and 16667
