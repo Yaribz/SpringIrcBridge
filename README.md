@@ -40,6 +40,10 @@ The springIrcBridgeServer process handles following POSIX signals:
 The SIGUSR1 signal can be used to reload code without impacting connected
 users.
 
+If a file named "BROADCAST.txt" is created or modified in current working
+directory, its content is instantly broadcasted to connected users as IRC
+notice message(s).
+
 Logs are available in the "log" subdirectory (created automatically if needed)
 
 Usage
