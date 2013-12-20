@@ -1060,6 +1060,7 @@ sub cbChannelTopic {
   if(defined $self->{pendingChan} && $chan eq $self->{pendingChan}) {
     $time=$1 if($time =~ /^(\d{10,})\d{3}$/);
     $self->send(":$self->{login}!~$self->{ident}\@$self->{host} JOIN \#$chan");
+    $topic=substr($topic,0,(510-length(":$springHost 332 $self->{login} \#$chan :")));
     $self->send(":$springHost 332 $self->{login} \#$chan :$topic");
     $self->send(":$springHost 333 $self->{login} \#$chan $user $time");
     applyChannelJoin();
@@ -1299,6 +1300,7 @@ sub hUserHost {
 sub cbChannel {
   my (undef,$chan,$nb,@topicTokens)=@_;
   my $topic=join(" ",@topicTokens);
+  $topic=substr($topic,0,(510-length(":$springHost 322 $self->{login} \#$chan $nb :")));
   $self->send(":$springHost 322 $self->{login} \#$chan $nb :$topic");
 }
 
@@ -1344,6 +1346,7 @@ sub makeBattleString {
     my $usersString=join(",",@{$p_b->{userList}});
     $battleString.=" | $usersString";
   }
+  $battleString=substr($battleString,0,450);
   return ($battleString,$nbUsers);
 }
 
