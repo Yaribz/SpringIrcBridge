@@ -262,9 +262,9 @@ sub send {
     $sl->log("Unable to send command \"$command\" to IRC client, not connected!".logSuffix(),1);
   }else{
     my $ircSock=$self->{ircSock};
-    print $ircSock "$command\cJ";
-    print $ircSock ":DEBUG PRIVMSG \&debug_irc :[\cC04 C <- B \cC01] $command\cJ" if($self->{isInDebugIrc} && ! $noDebug);
-    print $ircSock ":DEBUG PRIVMSG \&debug :[\cC04 C <- B      \cC01] $command\cJ" if($self->{isInDebug} && ! $noDebug);
+    print $ircSock "$command\cM\cJ";
+    print $ircSock ":DEBUG PRIVMSG \&debug_irc :[\cC04 C <- B \cC01] $command\cM\cJ" if($self->{isInDebugIrc} && ! $noDebug);
+    print $ircSock ":DEBUG PRIVMSG \&debug :[\cC04 C <- B      \cC01] $command\cM\cJ" if($self->{isInDebug} && ! $noDebug);
   }
 }
 
