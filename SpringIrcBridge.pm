@@ -822,8 +822,9 @@ sub hTopic {
 
 sub hPrivMsg {
   my (undef,$destAndMsg)=@_;
-  if($destAndMsg =~ /^([^ ]+) :(.*)$/) {
+  if($destAndMsg =~ /^([^ ]+) (.*)$/) {
     my ($dest,$msg)=($1,$2);
+    $msg=$1 if($msg =~ /^:(.*)$/);
     if($dest =~ /^\#(.+)$/) {
       $dest=$1;
       if($msg =~ /^ACTION (.*)$/) {
