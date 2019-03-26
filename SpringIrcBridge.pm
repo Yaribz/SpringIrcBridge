@@ -1,7 +1,7 @@
 # Perl module implementing the protocol translation between an IRC client and
 # the SpringRTS lobby server.
 #
-# Copyright (C) 2013  Yann Riou <yaribzh@gmail.com>
+# Copyright (C) 2013-2019  Yann Riou <yaribzh@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -25,11 +25,12 @@ use IO::Select;
 
 use SimpleLog;
 use SpringLobbyInterface;
+die "This version of SpringIrcBridge requires SpringLobbyInterface module version 0.26 or later\n" if(SpringLobbyInterface::getVersion() =~ /^(\d+\.\d+)/ && $1 < 0.26);
 
 # Internal data ###############################################################
 
 my $springHost='lobby.springrts.com';
-my $version='0.1';
+my $version='0.6';
 
 my %ircHandlers = (
   nick => \&hNick,
@@ -88,7 +89,7 @@ sub new {
                                      serverHost => $springHost,
                                      warnForUnhandledMessages => 0),
     exiting => 0,
-    pendingChan => undef,
+    pendingChan => {},
     pendingQuit => {},
     ident => undef,
     host => undef,
@@ -435,6 +436,7 @@ sub hJoin {
         sendLobbyCommand(["JOIN",$chan]);
       }
     }elsif($chan eq '&debug') {
+      next if($self->{isInDebug});
       $self->send(":$self->{login}!~$self->{ident}\@$self->{host} JOIN \&debug");
       $self->send(":$springHost 332 $self->{login} \&debug :IRC bridge special channel for network traffic debug (C=Client, B=Bridge, S=Server)");
       $self->send(":$springHost 333 $self->{login} \&debug SpringIrcBridge 0");
@@ -442,6 +444,7 @@ sub hJoin {
       $self->send(":$springHost 366 $self->{login} \&debug :End of /NAMES list.");
       $self->{isInDebug}=1;
     }elsif($chan eq '&debug_lobby') {
+      next if($self->{isInDebugLobby});
       $self->send(":$self->{login}!~$self->{ident}\@$self->{host} JOIN \&debug_lobby");
       $self->send(":$springHost 332 $self->{login} \&debug_lobby :IRC bridge special channel for Spring lobby traffic debug (B=Bridge, S=Server)");
       $self->send(":$springHost 333 $self->{login} \&debug_lobby SpringIrcBridge 0");
@@ -449,6 +452,7 @@ sub hJoin {
       $self->send(":$springHost 366 $self->{login} \&debug_lobby :End of /NAMES list.");
       $self->{isInDebugLobby}=1;
     }elsif($chan eq '&debug_irc') {
+      next if($self->{isInDebugIrc});
       $self->send(":$self->{login}!~$self->{ident}\@$self->{host} JOIN \&debug_irc");
       $self->send(":$springHost 332 $self->{login} \&debug_irc :IRC bridge special channel for IRC traffic debug (C=Client, B=Bridge)");
       $self->send(":$springHost 333 $self->{login} \&debug_irc SpringIrcBridge 0");
@@ -456,6 +460,7 @@ sub hJoin {
       $self->send(":$springHost 366 $self->{login} \&debug_irc :End of /NAMES list.");
       $self->{isInDebugIrc}=1;
     }elsif($chan eq '&local') {
+      next if($self->{isInLocal});
       $self->{isInLocal}=1;
       $self->{userModes}->{'&local'}={};
       $self->send(":$self->{login}!~$self->{ident}\@$self->{host} JOIN \&local");
@@ -494,25 +499,31 @@ sub hJoin {
         $self->send(":$springHost 353 $self->{login} = \&local :$listString");
       }
       $self->send(":$springHost 366 $self->{login} \&local :End of /NAMES list.");
-    }elsif($chan =~ /^\&(\d+)$/) {
-      if(defined $k) {
-        sendLobbyCommand(["JOINBATTLE",$1,$k]);
-      }else{
-        sendLobbyCommand(["JOINBATTLE",$1]);
-      }
-      $self->{pendingBattle}=$1;
     }elsif($chan =~ /^\&([^ ]+)$/) {
-      my $joinedUser=$1;
-      if(exists $self->{userBattles}->{$joinedUser}) {
-        if(defined $k) {
-          sendLobbyCommand(["JOINBATTLE",$self->{userBattles}->{$joinedUser},$k]);
+      my $joinedBattle=$1;
+      if($joinedBattle !~ /^\d+$/) {
+        $joinedBattle=fixUserCase($joinedBattle);
+        if(exists $self->{userBattles}->{$joinedBattle}) {
+          $joinedBattle=$self->{userBattles}{$joinedBattle};
         }else{
-          sendLobbyCommand(["JOINBATTLE",$self->{userBattles}->{$joinedUser}]);
+          $self->send(":$springHost 479 $self->{login} $chan :Cannot join battle (user $joinedBattle not in battle)");
+          next;
         }
-        $self->{pendingBattle}=$self->{userBattles}->{$joinedUser};
-      }else{
-        $self->send(":$springHost 479 $self->{login} \&$joinedUser :Cannot join battle (user $joinedUser not in battle)");
       }
+      if(defined $self->{pendingBattle}) {
+        $self->send(":$springHost 479 $self->{login} $chan :Cannot join battle (you are already joining another battle)") unless($joinedBattle == $self->{pendingBattle});
+        next;
+      }
+      if(defined $self->{battle}) {
+        next if($self->{battle} == $joinedBattle);
+        sendLobbyCommand(["LEAVEBATTLE"]);
+      }
+      if(defined $k) {
+        sendLobbyCommand(["JOINBATTLE",$joinedBattle,$k]);
+      }else{
+        sendLobbyCommand(["JOINBATTLE",$joinedBattle]);
+      }
+      $self->{pendingBattle}=$joinedBattle;
     }
   }
 }
@@ -588,7 +599,7 @@ sub hWhois {
     }
     my $additionalInfoString="";
     $additionalInfoString=", in-game" if($p_userData->{status}->{inGame});
-    $self->send(":$springHost 311 $self->{login} $nick $p_userData->{country}_$p_userData->{cpu} $p_userData->{accountId}.$springHost * :$nick ($ranks[$p_userData->{status}->{rank}]$additionalInfoString)");
+    $self->send(":$springHost 311 $self->{login} $nick $p_userData->{country} $p_userData->{accountId}.$springHost * :$nick ($ranks[$p_userData->{status}->{rank}]$additionalInfoString)");
     $self->send(":$springHost 312 $self->{login} $nick $springHost :Spring Lobby Server");
     if($p_userData->{status}->{access}) {
       $self->send(":$springHost 313 $self->{login} $nick :is a Spring moderator");
@@ -625,7 +636,7 @@ sub hWho {
     if(exists $self->{lobby}->{battles}->{$battle}) {
       foreach my $u (@{$self->{lobby}->{battles}->{$battle}->{userList}}) {
         my $p_userData=$self->{lobby}->{users}->{$u};
-        my $userString="$p_userData->{country}_$p_userData->{cpu} $p_userData->{accountId}.$springHost $springHost $u ";
+        my $userString="$p_userData->{country} $p_userData->{accountId}.$springHost $springHost $u ";
         if($p_userData->{status}->{away}) {
           $userString.='G';
         }else{
@@ -661,14 +672,14 @@ sub hWho {
     my $p_users={};
     if($name =~ /^\#([^ ]+)/) {
       my $chan=$1;
-      $p_users=$self->{lobby}->{channels}->{$chan} if(exists $self->{lobby}->{channels}->{$chan});
+      $p_users=$self->{lobby}->{channels}->{$chan}{users} if(exists $self->{lobby}->{channels}->{$chan});
       $name="\#$chan";
     }elsif($name eq '&local') {
       $p_users=$self->{lobby}->{users};
     }
     foreach my $u (keys %{$p_users}) {
       my $p_userData=$self->{lobby}->{users}->{$u};
-        my $userString="$p_userData->{country}_$p_userData->{cpu} $p_userData->{accountId}.$springHost $springHost $u ";
+        my $userString="$p_userData->{country} $p_userData->{accountId}.$springHost $springHost $u ";
       if($p_userData->{status}->{away}) {
         $userString.='G';
       }else{
@@ -812,7 +823,21 @@ sub hMode {
 
 sub hTopic {
   my (undef,$chanAndTopic)=@_;
-  if($chanAndTopic =~ /^\#([^ ]+) :(.+)$/) {
+  if($chanAndTopic =~ /^\#([^ ]+) ?$/) {
+    my $chan=$1;
+    if(! exists $self->{lobby}{channels}{$chan}) {
+      $self->{simpleLog}->log("Ignoring invalid TOPIC command \"$chanAndTopic\" (not in channel!)".logSuffix(),1);
+      return;
+    }
+    my ($topic,$author)=($self->{lobby}{channels}{$chan}{topic}{content},$self->{lobby}{channels}{$chan}{topic}{author});
+    if(! defined $topic || $topic eq '') {
+      $self->send(":$springHost 331 $self->{login} \#$chan :No topic is set");
+    }else{
+      $topic=substr($topic,0,(510-length(":$springHost 332 $self->{login} \#$chan :")));
+      $self->send(":$springHost 332 $self->{login} \#$chan :$topic");
+      $self->send(":$springHost 333 $self->{login} \#$chan $author ".time());
+    }
+  }elsif($chanAndTopic =~ /^\#([^ ]+) :(.+)$/) {
     my ($chan,$topic)=($1,$2);
     sendLobbyCommand(["CHANNELTOPIC",$chan,$topic]);
   }else{
@@ -829,26 +854,18 @@ sub hPrivMsg {
       $dest=$1;
       if($msg =~ /^ACTION (.*)$/) {
         $msg=$1;
-        if($msg ne '') {
-          sendLobbyCommand(["SAYEX",$dest,$msg]);
-        }
+        sendLobbyCommand(["SAYEX",$dest,$msg]) unless($msg eq '');
       }else{
-        if($msg ne '') {
-          sendLobbyCommand(["SAY",$dest,$msg]);
-        }
+        sendLobbyCommand(["SAY",$dest,$msg]) unless($msg eq '');
       }
     }elsif($dest =~ /^\&(\d+)$/) {
       $dest=$1;
       if(defined $self->{battle} && $self->{battle} == $dest) {
         if($msg =~ /^ACTION (.*)$/) {
           $msg=$1;
-          if($msg ne '') {
-            sendLobbyCommand(["SAYBATTLEEX",$msg]);
-          }
+          sendLobbyCommand(["SAYBATTLEEX",$msg]) unless($msg eq '');
         }else{
-          if($msg ne '') {
-            sendLobbyCommand(["SAYBATTLE",$msg]);
-          }
+          sendLobbyCommand(["SAYBATTLE",$msg]) unless($msg eq '');
         }
       }else{
         $self->{simpleLog}->log("Ignoring invalid PRIVMSG command (not in this battle) \"$destAndMsg\"".logSuffix(),1);
@@ -862,11 +879,22 @@ sub hPrivMsg {
       $self->{simpleLog}->log("Ignoring invalid PRIVMSG command (invalid channel) \"$destAndMsg\"".logSuffix(),1);
       $self->send(":$springHost 404 $self->{login} \&$dest :Cannot send to channel");
     }else{
-      $msg=$1 if($msg =~ /^ACTION (.*)$/);
       $dest=fixUserCase($dest);
       if(exists $self->{lobby}->{users}->{$dest}) {
-        if($msg ne '') {
-          sendLobbyCommand(["SAYPRIVATE",$dest,$msg]);
+        if($msg eq 'VERSION') {
+          my $p_destData=$self->{lobby}->{users}->{$dest};
+          if($p_destData->{lobbyClient} !~ /^SpringIrcBridge v.+$/ || $p_destData->{lobbyClient} =~ /^SpringIrcBridge v0\.[0-5]$/) {
+            my $destMask=$dest;
+            $destMask.="!$p_destData->{country}\@$p_destData->{accountId}.$springHost";
+            $self->send(":$destMask NOTICE $self->{login} :VERSION $p_destData->{lobbyClient}");
+          }else{
+            sendLobbyCommand(["SAYPRIVATE",$dest,$msg]);
+          }
+        }elsif($msg =~ /^ACTION (.*)$/) {
+          $msg=$1;
+          sendLobbyCommand(["SAYPRIVATEEX",$dest,$msg]) unless($msg eq '');
+        }else{
+          sendLobbyCommand(["SAYPRIVATE",$dest,$msg]) unless($msg eq '');
         }
       }else{
         $self->{simpleLog}->log("Ignoring invalid PRIVMSG command (user not found) \"$destAndMsg\"".logSuffix(),1);
@@ -880,10 +908,54 @@ sub hPrivMsg {
 
 sub hNotice {
   my (undef,$destAndMsg)=@_;
-  my $quotedLogin=quotemeta($self->{login});
-  if($destAndMsg =~ /^$quotedLogin :(.+)$/) {
-    my $msg=$1;
-    $self->send(":$self->{login}!~$self->{ident}\@$self->{host} NOTICE $self->{login} :$msg");
+  if($destAndMsg =~ /^([^ ]+) (.*)$/) {
+    my ($dest,$msg)=($1,$2);
+    $msg=$1 if($msg =~ /^:(.*)$/);
+    if($dest =~ /^\#(.+)$/) {
+      $dest=$1;
+      if($msg =~ /^ACTION (.*)$/) {
+        $msg=$1;
+        sendLobbyCommand(["SAYEX",$dest,"*IRC-NOTICE* $msg"]) unless($msg eq '');
+      }else{
+        sendLobbyCommand(["SAY",$dest,"*IRC-NOTICE* $msg"]) unless($msg eq '');
+      }
+    }elsif($dest =~ /^\&(\d+)$/) {
+      $dest=$1;
+      if(defined $self->{battle} && $self->{battle} == $dest) {
+        if($msg =~ /^ACTION (.*)$/) {
+          $msg=$1;
+          sendLobbyCommand(["SAYBATTLEEX","*IRC-NOTICE* $msg"]) unless($msg eq '');
+        }else{
+          sendLobbyCommand(["SAYBATTLE","*IRC-NOTICE* $msg"]) unless($msg eq '');
+        }
+      }else{
+        $self->{simpleLog}->log("Ignoring invalid NOTICE command (not in this battle) \"$destAndMsg\"".logSuffix(),1);
+        $self->send(":$springHost 404 $self->{login} \&$dest :Cannot send to channel");
+      }
+    }elsif($dest eq '&local') {
+      my @tokens=split(' ',$msg);
+      sendLobbyCommand(\@tokens);
+    }elsif($dest =~ /^\&(.*)$/) {
+      $dest=$1;
+      $self->{simpleLog}->log("Ignoring invalid NOTICE command (invalid channel) \"$destAndMsg\"".logSuffix(),1);
+      $self->send(":$springHost 404 $self->{login} \&$dest :Cannot send to channel");
+    }else{
+      $dest=fixUserCase($dest);
+      if(exists $self->{lobby}->{users}->{$dest}) {
+        if($msg =~ /^ACTION (.*)$/) {
+          $msg=$1;
+          sendLobbyCommand(["SAYPRIVATEEX",$dest,"*IRC-NOTICE* $msg"]) unless($msg eq '');
+        }elsif($msg =~ /^VERSION (.+)$/) {
+          my $ircVersion=$1;
+          sendLobbyCommand(["SAYPRIVATE",$dest,"*IRC-NOTICE* VERSION SpringIrcBridge v$version / $ircVersion"]);
+        }else{
+          sendLobbyCommand(["SAYPRIVATE",$dest,"*IRC-NOTICE* $msg"]) unless($msg eq '');
+        }
+      }else{
+        $self->{simpleLog}->log("Ignoring invalid NOTICE command (user not found) \"$destAndMsg\"".logSuffix(),1);
+        $self->send(":$springHost 401 $self->{login} $dest :No such nick");
+      }
+    }
   }else{
     $self->{simpleLog}->log("Ignoring invalid NOTICE command parameters \"$destAndMsg\"".logSuffix(),1);
   }
@@ -913,16 +985,17 @@ sub cbLobbyConnect {
 
   $self->{lobby}->addCallbacks({MOTD => \&cbMotd,
                                 CHANNELTOPIC => \&cbChannelTopic,
-                                NOCHANNELTOPIC => \&cbNoChannelTopic,
                                 LOGININFOEND => \&cbLoginInfoEnd,
                                 JOIN => \&cbJoin,
                                 JOINFAILED => \&cbJoinFailed,
+                                CLIENTS => \&cbClients,
                                 ADDUSER => \&cbAddUser,
                                 SAID => \&cbSaid,
                                 CHANNELMESSAGE => \&cbChannelMessage,
                                 SERVERMSG => \&cbServerMsg,
                                 SAIDEX => \&cbSaidEx,
                                 SAIDPRIVATE => \&cbSaidPrivate,
+                                SAIDPRIVATEEX => \&cbSaidPrivateEx,
                                 CHANNEL => \&cbChannel,
                                 ENDOFCHANNELS => \&cbEndOfChannels,
                                 SAIDBATTLE => \&cbSaidBattle,
@@ -946,7 +1019,7 @@ sub cbLobbyConnect {
   $self->{lobby}->addPreCallbacks({_ALL_ => \&cbAllLobbyTraffic,
                                    REMOVEUSER => \&cbPreRemoveUser});
 
-  sendLobbyCommand(["LOGIN",$self->{login},$self->{lobby}->marshallPasswd($self->{password}),0,$self->{ircSock}->peerhost(),'SpringIrcBridge v0.5',0,'a et'],
+  sendLobbyCommand(["LOGIN",$self->{login},$self->{lobby}->marshallPasswd($self->{password}),0,$self->{ircSock}->peerhost(),"SpringIrcBridge v$version",0,'l t cl'],
                               {ACCEPTED => \&cbLoginAccepted,
                                DENIED => \&cbLoginDenied},
                               \&cbLoginTimeout);
@@ -1012,17 +1085,28 @@ sub cbMotd {
   $self->send(":$springHost 372 $self->{login} :- $motdLine");
 }
 
-sub applyChannelJoin {
-  my $chan=$self->{pendingChan};
-  $self->{pendingChan}=undef;
-
-  if(! exists $self->{lobby}->{channels}->{$chan}) {
-    $self->{simpleLog}->log("applyChannelJoin() called for an unknown chan \"$chan\" !".logSuffix(),1);
+sub cbClients {
+  my (undef,$chan)=@_;
+  if(! exists $self->{pendingChan}{$chan}) {
+    $self->{simpleLog}->log("Received a CLIENTS command for channel \"$chan\" but we are not joining this channel !".logSuffix(),1);
     return;
   }
-
+  delete $self->{pendingChan}{$chan};
+  if(! exists $self->{lobby}{channels}{$chan}) {
+    $self->{simpleLog}->log("Received a CLIENTS command for a channel we are not in (\"$chan\") !".logSuffix(),1);
+    return;
+  }
+  my ($topic,$author)=($self->{lobby}{channels}{$chan}{topic}{content},$self->{lobby}{channels}{$chan}{topic}{author});
+  if(! defined $topic || $topic eq '') {
+    $self->send(":$springHost 331 $self->{login} \#$chan :No topic is set");
+  }else{
+    $topic=substr($topic,0,(510-length(":$springHost 332 $self->{login} \#$chan :")));
+    $self->send(":$springHost 332 $self->{login} \#$chan :$topic");
+    $self->send(":$springHost 333 $self->{login} \#$chan $author ".time());
+  }
+  
   my @users;
-  foreach my $u (keys %{$self->{lobby}->{channels}->{$chan}}) {
+  foreach my $u (keys %{$self->{lobby}->{channels}->{$chan}{users}}) {
     my $userString=$u;
     my $p_uStatus=$self->{lobby}->{users}->{$u}->{status};
     if($p_uStatus->{access}) {
@@ -1057,34 +1141,19 @@ sub applyChannelJoin {
 }
 
 sub cbChannelTopic {
-  my (undef,$chan,$user,$time,$topic)=@_;
-  if(defined $self->{pendingChan} && $chan eq $self->{pendingChan}) {
-    $time=$1 if($time =~ /^(\d{10,})\d{3}$/);
-    $self->send(":$self->{login}!~$self->{ident}\@$self->{host} JOIN \#$chan");
-    $topic=substr($topic,0,(510-length(":$springHost 332 $self->{login} \#$chan :")));
-    $self->send(":$springHost 332 $self->{login} \#$chan :$topic");
-    $self->send(":$springHost 333 $self->{login} \#$chan $user $time");
-    applyChannelJoin();
-  }else{
-    my $userMask=$user;
-    if(exists $self->{lobby}->{users}->{$user}) {
-      my $p_userData=$self->{lobby}->{users}->{$user};
-      $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
-    }
-    $self->send(":$userMask TOPIC \#$chan :$topic");
-  }
-}
-
-sub cbNoChannelTopic {
   my (undef,$chan)=@_;
-  $chan=$self->{pendingChan} if(! defined $chan && defined $self->{pendingChan});
-  if(defined $self->{pendingChan} && $chan eq $self->{pendingChan}) {
-    $self->send(":$self->{login}!~$self->{ident}\@$self->{host} JOIN \#$chan");
-    $self->send(":$springHost 331 $self->{login} \#$chan :No topic is set");
-    applyChannelJoin();
-  }else{
-    $self->{simpleLog}->log("Received a NOCHANNELTOPIC for a channel we are not joining (\"$chan\") !".logSuffix(),1);
+  return if(exists $self->{pendingChan}{$chan});
+  if(! exists $self->{lobby}{channels}{$chan}) {
+    $self->{simpleLog}->log("Received a CHANNELTOPIC command for a channel we are not in (\"$chan\") !".logSuffix(),1);
+    return;
   }
+  my ($topic,$author)=($self->{lobby}{channels}{$chan}{topic}{content},$self->{lobby}{channels}{$chan}{topic}{author});
+  my $authorMask=$author;
+  if(exists $self->{lobby}->{users}->{$author}) {
+    my $p_userData=$self->{lobby}->{users}->{$author};
+    $authorMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
+  }
+  $self->send(":$authorMask TOPIC \#$chan :$topic");
 }
 
 sub cbLoginInfoEnd {
@@ -1096,7 +1165,13 @@ sub cbLoginInfoEnd {
 
 sub cbJoin {
   my (undef,$chan)=@_;
-  $self->{pendingChan}=$chan;
+  $self->{pendingChan}{$chan}=1;
+
+  # Following line is unneeded because the lobby server doesn't follow the lobby
+  # protocol specification: it sends both JOINED and JOIN commands to clients who
+  # just joined a channel.
+  #  $self->send(":$self->{login}!~$self->{ident}\@$self->{host} JOIN \#$chan");
+  
 }
 
 sub cbJoinFailed {
@@ -1110,9 +1185,14 @@ sub cbSaid {
   my $userMask=$user;
   if(exists $self->{lobby}->{users}->{$user}) {
     my $p_userData=$self->{lobby}->{users}->{$user};
-    $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+    $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
   }
-  $self->send(":$userMask PRIVMSG \#$chan :$msg");
+  my $msgMode='PRIVMSG';
+  if($msg =~ /^\*IRC-NOTICE\* (.+)$/) {
+    $msg=$1;
+    $msgMode='NOTICE';
+  }
+  $self->send(":$userMask $msgMode \#$chan :$msg");
 }
 
 sub cbSaidBattle {
@@ -1121,9 +1201,14 @@ sub cbSaidBattle {
   my $userMask=$user;
   if(exists $self->{lobby}->{users}->{$user}) {
     my $p_userData=$self->{lobby}->{users}->{$user};
-    $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+    $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
   }
-  $self->send(":$userMask PRIVMSG \&$self->{battle} :$msg");
+  my $msgMode='PRIVMSG';
+  if($msg =~ /^\*IRC-NOTICE\* (.+)$/) {
+    $msg=$1;
+    $msgMode='NOTICE';
+  }
+  $self->send(":$userMask $msgMode \&$self->{battle} :$msg");
 }
 
 sub cbSaidEx {
@@ -1132,9 +1217,14 @@ sub cbSaidEx {
   my $userMask=$user;
   if(exists $self->{lobby}->{users}->{$user}) {
     my $p_userData=$self->{lobby}->{users}->{$user};
-    $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+    $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
   }
-  $self->send(":$userMask PRIVMSG \#$chan :ACTION $msg");
+  my $msgMode='PRIVMSG';
+  if($msg =~ /^\*IRC-NOTICE\* (.+)$/) {
+    $msg=$1;
+    $msgMode='NOTICE';
+  }
+  $self->send(":$userMask $msgMode \#$chan :ACTION $msg");
 }
 
 sub cbSaidBattleEx {
@@ -1143,20 +1233,45 @@ sub cbSaidBattleEx {
   my $userMask=$user;
   if(exists $self->{lobby}->{users}->{$user}) {
     my $p_userData=$self->{lobby}->{users}->{$user};
-    $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+    $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
   }
-  $self->send(":$userMask PRIVMSG \&$self->{battle} :ACTION $msg");
+  my $msgMode='PRIVMSG';
+  if($msg =~ /^\*IRC-NOTICE\* (.+)$/) {
+    $msg=$1;
+    $msgMode='NOTICE';
+  }
+  $self->send(":$userMask $msgMode \&$self->{battle} :ACTION $msg");
 }
 
 sub cbSaidPrivate {
+  my (undef,$user,$msg)=@_;
+  my $userMask=$user;
+  if(exists $self->{lobby}->{users}->{$user}) {
+    my $p_userData=$self->{lobby}->{users}->{$user};
+    $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
+  }
+  my $msgMode='PRIVMSG';
+  if($msg =~ /^\*IRC-NOTICE\* (.+)$/) {
+    $msg=$1;
+    $msgMode='NOTICE';
+  }
+  $self->send(":$userMask $msgMode $self->{login} :$msg");
+}
+
+sub cbSaidPrivateEx {
   my (undef,$user,$msg)=@_;
   return if($user eq $self->{login});
   my $userMask=$user;
   if(exists $self->{lobby}->{users}->{$user}) {
     my $p_userData=$self->{lobby}->{users}->{$user};
-    $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+    $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
   }
-  $self->send(":$userMask PRIVMSG $self->{login} :$msg");
+  my $msgMode='PRIVMSG';
+  if($msg =~ /^\*IRC-NOTICE\* (.+)$/) {
+    $msg=$1;
+    $msgMode='NOTICE';
+  }
+  $self->send(":$userMask $msgMode $self->{login} :ACTION $msg");
 }
 
 sub cbChannelMessage {
@@ -1182,7 +1297,7 @@ sub cbJoined {
   my $mode;
   if(exists $self->{lobby}->{users}->{$user}) {
     my $p_userData=$self->{lobby}->{users}->{$user};
-    $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+    $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
     if(exists $self->{userModes}->{"\#$chan"}) {
       $self->{userModes}->{"\#$chan"}->{$user}='';
     }else{
@@ -1212,7 +1327,7 @@ sub cbLeft {
   my $userMask=$user;
   if(exists $self->{lobby}->{users}->{$user}) {
     my $p_userData=$self->{lobby}->{users}->{$user};
-    $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+    $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
   }
   if(defined $reason) {
     if($reason =~ /^\s*kicked from channel\s*$/) {
@@ -1245,7 +1360,7 @@ sub cbForceLeaveChannel {
   my $userMask=$kicker;
   if(exists $self->{lobby}->{users}->{$kicker}) {
     my $p_userData=$self->{lobby}->{users}->{$kicker};
-    $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+    $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
   }
   $self->send(":$userMask KICK \#$chan $self->{login}$reason");
 
@@ -1258,7 +1373,7 @@ sub cbAddUser {
     my $userMask=$user;
     if(exists $self->{lobby}->{users}->{$user}) {
       my $p_userData=$self->{lobby}->{users}->{$user};
-      $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+      $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
       $self->{userModes}->{'&local'}->{$user}='';
     }
     $self->send(":$userMask JOIN \&local");
@@ -1271,7 +1386,7 @@ sub cbPreRemoveUser {
   my $userMask=$user;
   if(exists $self->{lobby}->{users}->{$user}) {
     my $p_userData=$self->{lobby}->{users}->{$user};
-    $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+    $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
   }
   if(exists $self->{pendingQuit}->{$user}) {
     $self->send(":$userMask QUIT :$self->{pendingQuit}->{$user}");
@@ -1292,7 +1407,7 @@ sub hUserHost {
     $self->send(":$springHost 302 $self->{login} :$self->{login}=~$self->{ident}\@$self->{host}");
   }elsif(exists $self->{lobby}->{users}->{$user}) {
     my $p_userData=$self->{lobby}->{users}->{$user};
-    $self->send(":$springHost 302 $self->{login} :$user=$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost");
+    $self->send(":$springHost 302 $self->{login} :$user=$p_userData->{country}\@$p_userData->{accountId}.$springHost");
   }else{
     $self->send(":$springHost 401 $self->{login} $user :No such nick");
   }
@@ -1385,6 +1500,16 @@ sub cbRequestBattleStatus {
 
 sub cbJoinBattle {
   my (undef,$battle)=@_;
+  my $sl=$self->{simpleLog};
+  if(defined $self->{pendingBattle}) {
+    if($self->{pendingBattle} == $battle) {
+      $self->{pendingBattle}=undef;
+    }else{
+      $sl->("Joining a battle ($battle) which is not the requested one ($self->{pendingBattle})".logSuffix(),2);
+    }
+  }else{
+    $sl->("Joining an unrequested battle ($battle)".logSuffix(),2);
+  }
   $self->send(":$self->{login} JOIN \&$battle");
   $self->{battle}=$battle;
   my ($battleString)=makeBattleString($battle,0);
@@ -1437,6 +1562,7 @@ sub cbJoinBattleFailed {
   my $bat="battle";
   $bat=$self->{pendingBattle} if(defined $self->{pendingBattle});
   $self->send(":$springHost 479 $self->{login} \&$self->{pendingBattle} :Cannot join battle ($reason)");
+  $self->{pendingBattle}=undef;
 }
 
 sub cbJoinedBattle {
@@ -1447,7 +1573,7 @@ sub cbJoinedBattle {
     $self->{userModes}->{"\&$battleId"}->{$user}='';
     if(exists $self->{lobby}->{users}->{$user}) {
       my $p_userData=$self->{lobby}->{users}->{$user};
-      $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+      $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
       if($p_userData->{status}->{access}) {
         if($p_userData->{status}->{bot}) {
           $mode='!';
@@ -1473,7 +1599,7 @@ sub cbLeftBattle {
     my $userMask=$user;
     if(exists $self->{lobby}->{users}->{$user}) {
       my $p_userData=$self->{lobby}->{users}->{$user};
-      $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+      $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
     }
     $self->send(":$userMask PART \&$battleId");
     if($user eq $self->{login}) {
@@ -1597,7 +1723,7 @@ sub cbRing {
   my $userMask=$user;
   if(exists $self->{lobby}->{users}->{$user}) {
     my $p_userData=$self->{lobby}->{users}->{$user};
-    $userMask.="!$p_userData->{country}_$p_userData->{cpu}\@$p_userData->{accountId}.$springHost";
+    $userMask.="!$p_userData->{country}\@$p_userData->{accountId}.$springHost";
   }
   $self->send(":$userMask NOTICE $self->{login} :[RING]");
 }
