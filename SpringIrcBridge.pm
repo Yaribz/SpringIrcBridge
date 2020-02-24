@@ -30,7 +30,7 @@ die "This version of SpringIrcBridge requires SpringLobbyInterface module versio
 # Internal data ###############################################################
 
 my $springHost='lobby.springrts.com';
-my $version='0.6';
+my $version='0.7';
 
 my %ircHandlers = (
   nick => \&hNick,
@@ -1505,10 +1505,10 @@ sub cbJoinBattle {
     if($self->{pendingBattle} == $battle) {
       $self->{pendingBattle}=undef;
     }else{
-      $sl->("Joining a battle ($battle) which is not the requested one ($self->{pendingBattle})".logSuffix(),2);
+      $sl->log("Joining a battle ($battle) which is not the requested one ($self->{pendingBattle})".logSuffix(),2);
     }
   }else{
-    $sl->("Joining an unrequested battle ($battle)".logSuffix(),2);
+    $sl->log("Joining an unrequested battle ($battle)".logSuffix(),2);
   }
   $self->send(":$self->{login} JOIN \&$battle");
   $self->{battle}=$battle;
@@ -1559,10 +1559,12 @@ sub cbJoinBattle {
 
 sub cbJoinBattleFailed {
   my (undef,$reason)=@_;
-  my $bat="battle";
-  $bat=$self->{pendingBattle} if(defined $self->{pendingBattle});
-  $self->send(":$springHost 479 $self->{login} \&$self->{pendingBattle} :Cannot join battle ($reason)");
-  $self->{pendingBattle}=undef;
+  if(defined $self->{pendingBattle}) {
+    $self->send(":$springHost 479 $self->{login} \&$self->{pendingBattle} :Cannot join battle ($reason)");
+    $self->{pendingBattle}=undef;
+  }else{
+    $self->{simpleLog}->log("Failed to join an unrequested battle".logSuffix(),2);
+  }
 }
 
 sub cbJoinedBattle {
