@@ -1,7 +1,7 @@
 # Perl module implementing the protocol translation between an IRC client and
 # the SpringRTS lobby server.
 #
-# Copyright (C) 2013-2019  Yann Riou <yaribzh@gmail.com>
+# Copyright (C) 2013-2025  Yann Riou <yaribzh@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -21,6 +21,7 @@ package SpringIrcBridge;
 
 use strict;
 
+use Encode qw'encode decode';
 use IO::Select;
 
 use SimpleLog;
@@ -30,7 +31,7 @@ die "This version of SpringIrcBridge requires SpringLobbyInterface module versio
 # Internal data ###############################################################
 
 my $springHost='lobby.springrts.com';
-my $version='0.7';
+my $version='0.8';
 
 my %ircHandlers = (
   nick => \&hNick,
@@ -107,7 +108,8 @@ sub new {
     wallopMode => 1,
     ircTimeout => 120,
     lobbyTimeout => 60,
-    lowerCaseClients => {}
+    lowerCaseClients => {},
+    userId => undef,
   };
 
   bless ($self, $class);
@@ -258,6 +260,7 @@ sub send {
   my $sl=$self->{simpleLog};
   my $ircNameString='';
   $ircNameString=' '.$self->{login} if(defined $self->{login});
+  $command=encode('utf8',$command);
   $sl->log("Sending to IRC client$ircNameString: \"$command\"",5) unless($noDebug);
   if(! ((defined $self->{ircSock}) && $self->{ircSock} && $self->{ircSock}->connected)) {
     $sl->log("Unable to send command \"$command\" to IRC client, not connected!".logSuffix(),1);
@@ -286,6 +289,7 @@ sub receiveCommand {
     $self->hDisconnect('IRC connection reset by peer');
     return 0;
   }
+  $data=decode('utf8',$data);
   my @commands=split(/(?<=[\cJ\cM])/, $data);
   $self->{timestamps}->{ircPong}=time;
   for my $commandNb (0..$#commands) {
@@ -519,9 +523,9 @@ sub hJoin {
         sendLobbyCommand(["LEAVEBATTLE"]);
       }
       if(defined $k) {
-        sendLobbyCommand(["JOINBATTLE",$joinedBattle,$k]);
+        sendLobbyCommand(["JOINBATTLE",$joinedBattle,$k,$self->{userId} ? ('NotApplicable') : ()]);
       }else{
-        sendLobbyCommand(["JOINBATTLE",$joinedBattle]);
+        sendLobbyCommand(["JOINBATTLE",$joinedBattle,$self->{userId} ? ('*','NotApplicable') : ()]);
       }
       $self->{pendingBattle}=$joinedBattle;
     }
@@ -549,8 +553,6 @@ sub hPart {
   if($chan =~ /^\#([^\s]+)/) {
     $chan=$1; 
     sendLobbyCommand(["LEAVE",$chan]);
-    $self->send(":$self->{login}!~$self->{ident}\@$self->{host} PART $chanAndReason");
-    delete $self->{userModes}->{"\#$chan"};
   }elsif($chan eq '&debug') {
     $self->{isInDebug}=0;
     $self->send(":$self->{login}!~$self->{ident}\@$self->{host} PART $chanAndReason");
@@ -1019,7 +1021,10 @@ sub cbLobbyConnect {
   $self->{lobby}->addPreCallbacks({_ALL_ => \&cbAllLobbyTraffic,
                                    REMOVEUSER => \&cbPreRemoveUser});
 
-  sendLobbyCommand(["LOGIN",$self->{login},$self->{lobby}->marshallPasswd($self->{password}),0,$self->{ircSock}->peerhost(),"SpringIrcBridge v$version",0,'l t cl'],
+  if(! defined $self->{userId}) {
+    $self->{userId} = $self->{lobby}{serverParams}{protocolVersion} eq '0.38-33-ga5f3b28' ? int(rand(0xFFFFFFFE))+1 : 0;
+  }
+  sendLobbyCommand(["LOGIN",$self->{login},$self->{lobby}->marshallPasswd($self->{password}),0,$self->{ircSock}->peerhost(),"SpringIrcBridge v$version",$self->{userId},'l t cl'],
                               {ACCEPTED => \&cbLoginAccepted,
                                DENIED => \&cbLoginDenied},
                               \&cbLoginTimeout);
@@ -1335,8 +1340,10 @@ sub cbLeft {
     }elsif($reason =~ /^\s*kicked from channel (.+)$/) {
       my $kickReason=$1;
       $self->send(":$springHost KICK \#$chan $user :$kickReason");
-    }else{
+    }elsif($reason eq 'disconnected' || substr($reason,0,5) eq 'Quit:') {
       $self->{pendingQuit}->{$user}=$reason;
+    }else{
+      $self->send(":$userMask PART \#$chan :$reason");
     }
   }else{
     $self->send(":$userMask PART \#$chan");
@@ -1704,6 +1711,7 @@ sub cbBattleClosed {
   foreach my $user (keys %{$self->{userBattles}}) {
     delete $self->{userBattles}->{$user} if($self->{userBattles}->{$user} == $battleId);
   }
+  $self->{pendingBattle}=undef if(defined $self->{pendingBattle} && $self->{pendingBattle} == $battleId);
 }
 
 sub cbUpdateBattleInfo {

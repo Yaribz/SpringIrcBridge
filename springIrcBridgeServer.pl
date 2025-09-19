@@ -15,7 +15,7 @@
 # The SIGUSR1 signal can be used to reload code without impacting connected
 # users.
 #
-# Copyright (C) 2013  Yann Riou <yaribzh@gmail.com>
+# Copyright (C) 2013-2025  Yann Riou <yaribzh@gmail.com>
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -35,8 +35,11 @@ use strict;
 use threads;
 use threads::shared;
 
+use FindBin;
 use IO::Select;
 use IO::Socket::INET;
+
+use lib $FindBin::Bin;
 
 use SpringIrcBridge;
 

@@ -21,12 +21,17 @@ Dependencies
 The SpringIrcBridge application depends on following projects:
 * [SimpleLog](https://github.com/Yaribz/SimpleLog)
 * [SpringLobbyInterface](https://github.com/Yaribz/SpringLobbyInterface)
+* [SpringLobbyProtocol](https://github.com/Yaribz/SpringLobbyProtocol)
 
 Installation
 ------------
-* Copy the dependencies listed above ([SimpleLog.pm](https://raw.github.com/Yaribz/SimpleLog/master/SimpleLog.pm)
-  and [SpringLobbyInterface.pm](https://raw.github.com/Yaribz/SpringLobbyInterface/master/SpringLobbyInterface.pm))
+* Copy the dependencies listed above ([SimpleLog.pm](https://raw.github.com/Yaribz/SimpleLog/master/SimpleLog.pm),
+  [SpringLobbyInterface.pm](https://raw.github.com/Yaribz/SpringLobbyInterface/master/SpringLobbyInterface.pm)) and
+  [SpringLobbyProtocol.pm](https://github.com/Yaribz/SpringLobbyProtocol/raw/refs/heads/main/SpringLobbyProtocol.pm)
   into same location as SpringIrcBridge files
+* If the IRC bridge must point to a custom lobby server (i.e. not
+  lobby.springrts.com), edit file SpringIrcBridge.pm and adjust the $springHost
+  variable declaration accordingly (line 33).
 * Run "springIrcBridgeServer.pl", it will listen to IRC connections on ports
   6667 and 16667
 
