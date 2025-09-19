@@ -30,8 +30,8 @@ Installation
   [SpringLobbyProtocol.pm](https://github.com/Yaribz/SpringLobbyProtocol/raw/refs/heads/main/SpringLobbyProtocol.pm))
   into same location as SpringIrcBridge files
 * If the IRC bridge must point to a custom lobby server (i.e. not
-  lobby.springrts.com), edit file SpringIrcBridge.pm and adjust the $springHost
-  variable declaration accordingly (line 33).
+  "lobby.springrts.com"), edit file "SpringIrcBridge.pm" and adjust the
+  "$springHost" variable declaration accordingly (line 33).
 * Run "springIrcBridgeServer.pl", it will listen to IRC connections on ports
   6667 and 16667
 
