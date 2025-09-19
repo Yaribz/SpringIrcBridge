@@ -63,7 +63,7 @@ Configure your IRC client as follows:
 Then you can use the bridge like any other IRC server (list channels, join
 channels, send private messages...).
 
-See the [SpringIrcBridge wiki](http://springrts.com/wiki/IrcBridge) for more
+See the [SpringIrcBridge wiki](https://github.com/Yaribz/SpringIrcBridge/wiki) for more
 information.
 
 Licensing
